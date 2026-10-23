@@ -1,0 +1,36 @@
+name: Refresh Zoundhub scores
+
+on:
+  schedule:
+    - cron: "17 5 * * *"   # daily, after Zoundhub's 24-hour update
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Zoundhub list
+        run: |
+          set -euo pipefail
+          mkdir -p data
+          curl -sSfL --retry 3 -o data/zoundhub-scores.json.tmp https://zoundhub.com/api/artists/all
+          # Refuse to overwrite the file with an empty or unexpected response
+          python3 -c "import json; d = json.load(open('data/zoundhub-scores.json.tmp')); assert isinstance(d, list) and len(d) > 1000, 'unexpected payload'"
+          mv data/zoundhub-scores.json.tmp data/zoundhub-scores.json
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/zoundhub-scores.json
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Refresh Zoundhub scores"
+            git push
+          fi
