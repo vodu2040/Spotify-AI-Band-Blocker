@@ -1,48 +1,27 @@
-name: Refresh Zoundhub scores
-
-on:
-  schedule:
-    - cron: "17 5 * * *"   # daily, after Zoundhub's 24-hour update
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  refresh:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+- name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Download Zoundhub list
         run: |
           set -euo pipefail
           mkdir -p data
-          curl -sSfL --retry 3 \
-            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36" \
-            -H "Accept: application/json, text/plain, */*" \
-            -H "Accept-Language: en-US,en;q=0.9" \
-            -H "Sec-Ch-Ua: \"Chromium\";v=\"128\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"128\"" \
-            -H "Sec-Ch-Ua-Mobile: ?0" \
-            -H "Sec-Ch-Ua-Platform: \"Windows\"" \
-            -H "Sec-Fetch-Dest: empty" \
-            -H "Sec-Fetch-Mode: cors" \
-            -H "Sec-Fetch-Site: same-origin" \
-            -o data/zoundhub-scores.json.tmp \
-            https://zoundhub.com/api/artists/all
+          pip install curl_cffi
 
-          # Refuse to overwrite the file with an empty or unexpected response
-          python3 -c "import json; d = json.load(open('data/zoundhub-scores.json.tmp')); assert isinstance(d, list) and len(d) > 1000, 'unexpected payload'"
-          mv data/zoundhub-scores.json.tmp data/zoundhub-scores.json
+          python3 - << 'EOF'
+          from curl_cffi import requests
+          import json
 
-      - name: Commit if changed
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/zoundhub-scores.json
-          if git diff --cached --quiet; then
-            echo "No changes"
-          else
-            git commit -m "Refresh Zoundhub scores"
-            git push
-          fi
+          url = "https://zoundhub.com/api/artists/all"
+          response = requests.get(url, impersonate="chrome124", timeout=30)
+          
+          if response.status_code != 200:
+              raise SystemExit(f"Request failed with HTTP {response.status_code}: {response.text[:200]}")
+
+          data = response.json()
+          assert isinstance(data, list) and len(data) > 1000, "Unexpected payload format or length"
+
+          with open("data/zoundhub-scores.json", "w", encoding="utf-8") as f:
+              json.dump(data, f)
+          EOF
