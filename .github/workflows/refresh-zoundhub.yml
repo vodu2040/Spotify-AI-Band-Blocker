@@ -19,27 +19,59 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install dependencies
+        run: |
+          pip install playwright playwright-stealth
+          playwright install chromium --with-deps
+
       - name: Download Zoundhub list
         run: |
           set -euo pipefail
           mkdir -p data
-          pip install curl_cffi
 
-          python3 - << 'EOF'
-          from curl_cffi import requests
+          xvfb-run python3 - << 'EOF'
           import json
+          import time
+          from playwright.sync_api import sync_playwright
+          from playwright_stealth import stealth_sync
 
           url = "https://zoundhub.com/api/artists/all"
-          response = requests.get(url, impersonate="chrome124", timeout=30)
 
-          if response.status_code != 200:
-              raise SystemExit(f"Request failed with HTTP {response.status_code}: {response.text[:200]}")
+          with sync_playwright() as p:
+              # Run headful under virtual display (xvfb) to evade headless detection
+              browser = p.chromium.launch(headless=False)
+              context = browser.new_context(
+                  viewport={"width": 1920, "height": 1080},
+                  user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+              )
+              page = context.new_page()
+              stealth_sync(page)
 
-          data = response.json()
-          assert isinstance(data, list) and len(data) > 1000, "Unexpected payload format or length"
+              print("Navigating to URL...")
+              page.goto(url, wait_until="domcontentloaded", timeout=60000)
 
-          with open("data/zoundhub-scores.json", "w", encoding="utf-8") as f:
-              json.dump(data, f)
+              # Wait up to 30 seconds for Cloudflare's "Just a moment..." challenge to clear
+              for _ in range(30):
+                  title = page.title()
+                  print(f"Current page title: {title}")
+                  if "Just a moment" not in title:
+                      break
+                  time.sleep(1)
+
+              # Small settle delay after redirect
+              time.sleep(2)
+
+              # Extract the raw response text from the rendered page
+              raw_content = page.locator("body").inner_text()
+              data = json.loads(raw_content)
+
+              assert isinstance(data, list) and len(data) > 1000, f"Unexpected payload: {str(data)[:200]}"
+
+              with open("data/zoundhub-scores.json", "w", encoding="utf-8") as f:
+                  json.dump(data, f)
+
+              print("Successfully saved data/zoundhub-scores.json")
+              browser.close()
           EOF
 
       - name: Commit if changed
