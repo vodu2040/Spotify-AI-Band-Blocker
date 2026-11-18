@@ -34,8 +34,28 @@ jobs:
           import time
           from playwright.sync_api import sync_playwright
 
-          base_url = "https://zoundhub.com/"
-          api_url = "https://zoundhub.com/api/artists/all"
+          captured_payload = None
+          seen_urls = []
+
+          def handle_response(response):
+              global captured_payload
+              url = response.url
+              ct = response.headers.get("content-type", "")
+              if "zoundhub.com" in url and ("json" in ct or "/api/" in url):
+                  seen_urls.append(f"{response.status} {ct} -> {url}")
+                  if response.status == 200 and "json" in ct:
+                      try:
+                          body = response.json()
+                          # Check if this JSON response is the artist list (or wraps a list > 1000 items)
+                          if isinstance(body, list) and len(body) > 1000:
+                              captured_payload = body
+                          elif isinstance(body, dict):
+                              for val in body.values():
+                                  if isinstance(val, list) and len(val) > 1000:
+                                      captured_payload = val
+                                      break
+                      except Exception:
+                          pass
 
           with sync_playwright() as p:
               browser = p.chromium.launch(
@@ -55,48 +75,38 @@ jobs:
               )
 
               page = context.new_page()
+              page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+              page.on("response", handle_response)
 
-              page.add_init_script("""
-                  Object.defineProperty(navigator, 'webdriver', {
-                      get: () => undefined
-                  });
-              """)
+              print("Loading Zoundhub homepage...")
+              page.goto("https://zoundhub.com/", wait_until="networkidle", timeout=60000)
+              time.sleep(3)
 
-              print(f"Navigating to {base_url} to establish session...")
-              page.goto(base_url, wait_until="domcontentloaded", timeout=60000)
+              # Print all internal links so we see the current site routes if homepage doesn't load the full list
+              links = page.eval_on_selector_all("a[href]", "els => [...new Set(els.map(e => e.href))]")
+              print("Discovered site links:", links)
 
-              for i in range(30):
-                  title = page.title()
-                  print(f"[{i+1}s] Current page title: {title}")
-                  if title and "Just a moment" not in title and "Attention Required" not in title:
-                      break
-                  time.sleep(1)
+              # If not captured on homepage, navigate to an artists/database link if present
+              if not captured_payload:
+                  for link in links:
+                      if any(k in link.lower() for k in ["artist", "list", "database", "explore", "browse"]):
+                          print(f"Navigating to {link}...")
+                          page.goto(link, wait_until="networkidle", timeout=60000)
+                          time.sleep(3)
+                          if captured_payload:
+                              break
 
-              time.sleep(2)
+              print("Intercepted API/JSON requests:")
+              for item in seen_urls:
+                  print("  ", item)
 
-              print(f"Navigating directly to {api_url} with browser HTML headers...")
-              response = page.goto(api_url, wait_until="networkidle", timeout=60000)
-
-              status = response.status if response else 0
-              raw_content = response.text() if response else ""
-              print(f"API HTTP Status: {status} | Payload length: {len(raw_content)} chars")
-
-              if status != 200 or not raw_content.strip():
-                  print(f"Response preview: {raw_content[:500]}")
-                  raise RuntimeError(f"Failed to fetch valid JSON (HTTP {status})")
-
-              try:
-                  data = json.loads(raw_content)
-              except json.JSONDecodeError as e:
-                  print(f"Invalid JSON preview: {raw_content[:500]}")
-                  raise e
-
-              assert isinstance(data, list) and len(data) > 1000, f"Unexpected payload: {str(data)[:200]}"
+              if not captured_payload:
+                  raise RuntimeError("Could not automatically capture artist list JSON. Check intercepted URLs above.")
 
               with open("data/zoundhub-scores.json", "w", encoding="utf-8") as f:
-                  json.dump(data, f)
+                  json.dump(captured_payload, f)
 
-              print(f"Successfully saved {len(data)} records to data/zoundhub-scores.json")
+              print(f"Successfully saved {len(captured_payload)} records to data/zoundhub-scores.json")
               browser.close()
           EOF
 
