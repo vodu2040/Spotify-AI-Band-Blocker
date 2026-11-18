@@ -20,9 +20,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install playwright
-          playwright install chromium --with-deps
+        run: pip install playwright
 
       - name: Download Zoundhub list
         run: |
@@ -46,7 +44,6 @@ jobs:
                   if response.status == 200 and "json" in ct:
                       try:
                           body = response.json()
-                          # Check if this JSON response is the artist list (or wraps a list > 1000 items)
                           if isinstance(body, list) and len(body) > 1000:
                               captured_payload = body
                           elif isinstance(body, dict):
@@ -59,6 +56,7 @@ jobs:
 
           with sync_playwright() as p:
               browser = p.chromium.launch(
+                  channel="chrome",
                   headless=False,
                   args=[
                       "--disable-blink-features=AutomationControlled",
@@ -70,8 +68,7 @@ jobs:
               )
 
               context = browser.new_context(
-                  viewport={"width": 1920, "height": 1080},
-                  user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                  viewport={"width": 1920, "height": 1080}
               )
 
               page = context.new_page()
@@ -82,11 +79,9 @@ jobs:
               page.goto("https://zoundhub.com/", wait_until="networkidle", timeout=60000)
               time.sleep(3)
 
-              # Print all internal links so we see the current site routes if homepage doesn't load the full list
               links = page.eval_on_selector_all("a[href]", "els => [...new Set(els.map(e => e.href))]")
               print("Discovered site links:", links)
 
-              # If not captured on homepage, navigate to an artists/database link if present
               if not captured_payload:
                   for link in links:
                       if any(k in link.lower() for k in ["artist", "list", "database", "explore", "browse"]):
