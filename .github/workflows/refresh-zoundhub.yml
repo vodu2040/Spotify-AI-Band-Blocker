@@ -62,10 +62,9 @@ jobs:
                   });
               """)
 
-              print(f"Navigating to {base_url} to clear any WAF/Cloudflare challenge...")
+              print(f"Navigating to {base_url} to establish session...")
               page.goto(base_url, wait_until="domcontentloaded", timeout=60000)
 
-              # Wait up to 30 seconds for Cloudflare challenge to clear on the HTML homepage
               for i in range(30):
                   title = page.title()
                   print(f"[{i+1}s] Current page title: {title}")
@@ -75,18 +74,11 @@ jobs:
 
               time.sleep(2)
 
-              print(f"Fetching {api_url} inside browser session...")
-              result = page.evaluate("""async (url) => {
-                  const res = await fetch(url, {
-                      headers: { 'Accept': 'application/json' },
-                      credentials: 'include'
-                  });
-                  const text = await res.text();
-                  return { status: res.status, text: text };
-              }""", api_url)
+              print(f"Navigating directly to {api_url} with browser HTML headers...")
+              response = page.goto(api_url, wait_until="networkidle", timeout=60000)
 
-              status = result["status"]
-              raw_content = result["text"]
+              status = response.status if response else 0
+              raw_content = response.text() if response else ""
               print(f"API HTTP Status: {status} | Payload length: {len(raw_content)} chars")
 
               if status != 200 or not raw_content.strip():
